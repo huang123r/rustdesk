@@ -1,16 +1,21 @@
-// src/platform/windows/driver.rs
+#![allow(dead_code)]
+// Windows-only DD 驱动加载与封装
+// 仅在 target_os = "windows" 时编译此文件
+#[cfg(target_os = "windows")]
+
 use std::ffi::c_void;
 use std::mem;
-use std::path::Path;
-use std::ptr;
+use std::ffi::CString;
 use winapi::ctypes::c_int;
 use winapi::um::libloaderapi::{FreeLibrary, LoadLibraryA, GetProcAddress};
 use winapi::um::winnt::LPCSTR;
-use std::ffi::CString;
 
 // 导入日志宏
 #[allow(unused_imports)]
 use log::{debug, error, info, warn, trace};
+
+// 重新导出 enigo::Key 以便其它文件使用（Windows 下）
+pub use enigo::Key;
 
 #[derive(Debug)]
 pub struct DdDriver {
@@ -25,25 +30,20 @@ pub struct DdDriver {
 impl DdDriver {
     pub fn new() -> Option<Self> {
         unsafe {
-            // 从当前目录加载DD驱动DLL
             let dll_name = "dd32695.x64.dll";
-            
-            // 尝试在当前目录查找DLL
             let current_exe = std::env::current_exe()
                 .ok()
                 .and_then(|exe_path| exe_path.parent().map(|p| p.to_path_buf()));
-            
+
             let dll_path = if let Some(mut path) = current_exe {
                 path.push(dll_name);
                 path
             } else {
-                // 如果无法获取当前目录，使用相对路径
                 std::path::PathBuf::from(dll_name)
             };
-            
+
             log::debug!("尝试加载DD驱动: {:?}", dll_path);
-            
-            // 转换为C字符串
+
             let c_path = match dll_path.to_str().and_then(|s| CString::new(s).ok()) {
                 Some(cstr) => cstr,
                 None => {
@@ -51,71 +51,65 @@ impl DdDriver {
                     return None;
                 }
             };
-            
-            // 加载DLL
+
             let hmodule = LoadLibraryA(c_path.as_ptr() as LPCSTR);
-            
+
             if hmodule.is_null() {
-                // 获取Windows错误信息
                 let error_code = winapi::um::errhandlingapi::GetLastError();
-                log::error!("无法加载DD驱动DLL (错误代码: {})，请确保dd32695.x64.dll在当前目录", error_code);
+                log::error!(
+                    "无法加载DD驱动DLL (错误代码: {})，请确保 dd32695.x64.dll 在可访问路径",
+                    error_code
+                );
                 return None;
             }
-            
-            // 获取函数地址
+
             let dd_btn_name = CString::new("DD_btn").unwrap();
             let dd_key_name = CString::new("DD_key").unwrap();
             let dd_mov_name = CString::new("DD_mov").unwrap();
             let dd_whl_name = CString::new("DD_whl").unwrap();
-            
+
             let dd_btn = GetProcAddress(hmodule as _, dd_btn_name.as_ptr() as LPCSTR);
             let dd_key = GetProcAddress(hmodule as _, dd_key_name.as_ptr() as LPCSTR);
             let dd_mov = GetProcAddress(hmodule as _, dd_mov_name.as_ptr() as LPCSTR);
             let dd_whl = GetProcAddress(hmodule as _, dd_whl_name.as_ptr() as LPCSTR);
-            
-            // 转换为函数指针
+
             let dd_btn_func = if !dd_btn.is_null() {
                 Some(mem::transmute(dd_btn))
             } else {
-                log::error!("无法获取DD_btn函数地址");
+                log::error!("无法获取 DD_btn 函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
-            
+
             let dd_key_func = if !dd_key.is_null() {
                 Some(mem::transmute(dd_key))
             } else {
-                log::error!("无法获取DD_key函数地址");
+                log::error!("无法获取 DD_key 函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
-            
+
             let dd_mov_func = if !dd_mov.is_null() {
                 Some(mem::transmute(dd_mov))
             } else {
-                log::error!("无法获取DD_mov函数地址");
+                log::error!("无法获取 DD_mov 函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
-            
+
             let dd_whl_func = if !dd_whl.is_null() {
                 Some(mem::transmute(dd_whl))
             } else {
-                log::error!("无法获取DD_whl函数地址");
+                log::error!("无法获取 DD_whl 函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
-            
-            // 测试驱动
+
+            // 简单测试调用（可选）
             if let Some(func) = dd_btn_func {
-                let result = func(0);
-                if result == 1 {
-                    log::info!("DD驱动初始化成功 (从当前目录加载)");
-                } else {
-                    log::warn!("DD驱动测试返回异常: {}", result);
-                }
+                let _ = func(0);
             }
-            
+
             Some(DdDriver {
                 hmodule,
                 dd_btn: dd_btn_func,
@@ -126,209 +120,168 @@ impl DdDriver {
             })
         }
     }
-    
+
     pub fn is_initialized(&self) -> bool {
         self.initialized
     }
-    
+
     pub fn mouse_down(&self, button: MouseButton) -> bool {
         if !self.initialized {
             return false;
         }
-        
         let code = match button {
-            MouseButton::Left => 1,     // 左键按下
-            MouseButton::Right => 4,    // 右键按下
-            MouseButton::Middle => 16,  // 中键按下
-            MouseButton::Back => 64,    // 后退键按下
-            MouseButton::Forward => 128,// 前进键按下
+            MouseButton::Left => 1,
+            MouseButton::Right => 4,
+            MouseButton::Middle => 16,
+            MouseButton::Back => 64,
+            MouseButton::Forward => 128,
         };
-        
         unsafe {
             if let Some(func) = self.dd_btn {
-                let result = func(code);
-                if result != 1 {
-                    log::debug!("DD驱动: 鼠标按下失败，返回码: {}", result);
-                }
-                result == 1
+                func(code) == 1
             } else {
                 false
             }
         }
     }
-    
+
     pub fn mouse_up(&self, button: MouseButton) -> bool {
         if !self.initialized {
             return false;
         }
-        
         let code = match button {
-            MouseButton::Left => 2,     // 左键释放
-            MouseButton::Right => 8,    // 右键释放
-            MouseButton::Middle => 32,  // 中键释放
-            MouseButton::Back => 0,     // 不支持
-            MouseButton::Forward => 0,  // 不支持
+            MouseButton::Left => 2,
+            MouseButton::Right => 8,
+            MouseButton::Middle => 32,
+            MouseButton::Back => 0,
+            MouseButton::Forward => 0,
         };
-        
         if code == 0 {
             return false;
         }
-        
         unsafe {
             if let Some(func) = self.dd_btn {
-                let result = func(code);
-                if result != 1 {
-                    log::debug!("DD驱动: 鼠标释放失败，返回码: {}", result);
-                }
-                result == 1
+                func(code) == 1
             } else {
                 false
             }
         }
     }
-    
+
     pub fn mouse_move_absolute(&self, x: i32, y: i32) -> bool {
         if !self.initialized {
             return false;
         }
-        
         unsafe {
             if let Some(func) = self.dd_mov {
-                let result = func(x, y);
-                if result != 1 {
-                    log::debug!("DD驱动: 鼠标移动失败，坐标({}, {})，返回码: {}", x, y, result);
-                }
-                result == 1
+                func(x, y) == 1
             } else {
                 false
             }
         }
     }
-    
+
     pub fn mouse_scroll(&self, delta: i32) -> bool {
         if !self.initialized {
             return false;
         }
-        
         unsafe {
             if let Some(func) = self.dd_whl {
-                let result = if delta > 0 {
-                    func(1)  // 向上滚动
-                } else {
-                    func(2)  // 向下滚动
-                };
-                if result != 1 {
-                    log::debug!("DD驱动: 鼠标滚轮失败，delta: {}，返回码: {}", delta, result);
-                }
-                result == 1
+                if delta > 0 { func(1) == 1 } else { func(2) == 1 }
             } else {
                 false
             }
         }
     }
-    
-    pub fn key_down(&self, key: Key) -> bool {
+
+    pub fn key_down(&self, key: enigo::Key) -> bool {
         if !self.initialized {
             return false;
         }
-        
         let dd_code = Self::key_to_dd_code(key);
         if dd_code == 0 {
-            log::debug!("DD驱动: 未知的按键: {:?}", key);
             return false;
         }
-        
         unsafe {
             if let Some(func) = self.dd_key {
-                let result = func(dd_code as c_int, 1);  // 1表示按下
-                if result != 1 {
-                    log::debug!("DD驱动: 按键按下失败，键码: {}，返回码: {}", dd_code, result);
-                }
-                result == 1
+                func(dd_code as c_int, 1) == 1
             } else {
                 false
             }
         }
     }
-    
-    pub fn key_up(&self, key: Key) -> bool {
+
+    pub fn key_up(&self, key: enigo::Key) -> bool {
         if !self.initialized {
             return false;
         }
-        
         let dd_code = Self::key_to_dd_code(key);
         if dd_code == 0 {
-            log::debug!("DD驱动: 未知的按键: {:?}", key);
             return false;
         }
-        
         unsafe {
             if let Some(func) = self.dd_key {
-                let result = func(dd_code as c_int, 2);  // 2表示释放
-                if result != 1 {
-                    log::debug!("DD驱动: 按键释放失败，键码: {}，返回码: {}", dd_code, result);
-                }
-                result == 1
+                func(dd_code as c_int, 2) == 1
             } else {
                 false
             }
         }
     }
-    
-    pub fn key_click(&self, key: Key) -> bool {
+
+    pub fn key_click(&self, key: enigo::Key) -> bool {
         self.key_down(key) && self.key_up(key)
     }
-    
-    pub fn get_key_state(&self, key: Key) -> bool {
-        // DD驱动没有提供获取按键状态的API
-        // 这是一个限制，我们需要记录自己的状态
+
+    pub fn get_key_state(&self, _key: enigo::Key) -> bool {
+        // DD 驱动没有提供获取按键状态的 API，这里返回 false（可在外部记录按键状态以补足）
         false
     }
-    
-    fn key_to_dd_code(key: Key) -> u32 {
+
+    fn key_to_dd_code(key: enigo::Key) -> u32 {
+        use enigo::Key::*;
         match key {
-            Key::Backspace => 214,
-            Key::Tab => 300,
-            Key::Return => 815,
-            Key::Escape => 100,
-            Key::Space => 603,
-            Key::Home => 704,
-            Key::End => 707,
-            Key::PageUp => 705,
-            Key::PageDown => 708,
-            Key::LeftArrow => 710,
-            Key::UpArrow => 709,
-            Key::RightArrow => 712,
-            Key::DownArrow => 711,
-            Key::Insert => 703,
-            Key::Delete => 706,
-            Key::CapsLock => 400,
-            Key::NumLock => 810,
-            Key::ScrollLock => 701,
-            Key::PrintScreen => 700,
-            Key::Pause => 702,
-            Key::Shift => 500,
-            Key::RightShift => 511,
-            Key::Control => 600,
-            Key::RightControl => 607,
-            Key::Alt => 604,
-            Key::RightAlt => 604,
-            Key::Meta => 601,      // Windows键
-            Key::RWin => 608,
-            Key::Apps => 609,      // 应用程序键
-            Key::F1 => 101,
-            Key::F2 => 102,
-            Key::F3 => 103,
-            Key::F4 => 104,
-            Key::F5 => 105,
-            Key::F6 => 106,
-            Key::F7 => 107,
-            Key::F8 => 108,
-            Key::F9 => 109,
-            Key::F10 => 110,
-            Key::F11 => 111,
-            Key::F12 => 112,
-            Key::Layout(c) => {
+            Backspace => 214,
+            Tab => 300,
+            Return => 815,
+            Escape => 100,
+            Space => 603,
+            Home => 704,
+            End => 707,
+            PageUp => 705,
+            PageDown => 708,
+            LeftArrow => 710,
+            UpArrow => 709,
+            RightArrow => 712,
+            DownArrow => 711,
+            Insert => 703,
+            Delete => 706,
+            CapsLock => 400,
+            NumLock => 810,
+            ScrollLock => 701,
+            PrintScreen => 700,
+            Pause => 702,
+            Shift => 500,
+            RightShift => 511,
+            Control => 600,
+            RightControl => 607,
+            Alt => 604,
+            RightAlt => 604,
+            Meta => 601,
+            RWin => 608,
+            Apps => 609,
+            F1 => 101,
+            F2 => 102,
+            F3 => 103,
+            F4 => 104,
+            F5 => 105,
+            F6 => 106,
+            F7 => 107,
+            F8 => 108,
+            F9 => 109,
+            F10 => 110,
+            F11 => 111,
+            F12 => 112,
+            Layout(c) => {
                 match c {
                     '0' => 210,
                     '1' => 201,
@@ -366,42 +319,42 @@ impl DdDriver {
                     'x' | 'X' => 502,
                     'y' | 'Y' => 306,
                     'z' | 'Z' => 501,
-                    ' ' => 603,  // 空格
-                    '-' => 211,  // 减号
-                    '=' => 212,  // 等号
-                    '[' => 311,  // 左方括号
-                    ']' => 312,  // 右方括号
-                    ';' => 410,  // 分号
-                    '\'' => 411, // 单引号
-                    '`' => 200,  // 反引号
-                    '\\' => 313, // 反斜杠
-                    ',' => 508,  // 逗号
-                    '.' => 509,  // 句点
-                    '/' => 510,  // 斜杠
+                    ' ' => 603,
+                    '-' => 211,
+                    '=' => 212,
+                    '[' => 311,
+                    ']' => 312,
+                    ';' => 410,
+                    '\'' => 411,
+                    '`' => 200,
+                    '\\' => 313,
+                    ',' => 508,
+                    '.' => 509,
+                    '/' => 510,
                     _ => 0,
                 }
             }
-            Key::Numpad0 => 810,
-            Key::Numpad1 => 811,
-            Key::Numpad2 => 812,
-            Key::Numpad3 => 813,
-            Key::Numpad4 => 814,
-            Key::Numpad5 => 815,
-            Key::Numpad6 => 816,
-            Key::Numpad7 => 817,
-            Key::Numpad8 => 818,
-            Key::Numpad9 => 819,
-            Key::NumpadMultiply => 820,
-            Key::NumpadAdd => 821,
-            Key::NumpadSubtract => 822,
-            Key::NumpadDecimal => 823,
-            Key::NumpadDivide => 824,
-            Key::NumpadEnter => 815,
-            Key::Multiply => 820,
-            Key::Add => 821,
-            Key::Subtract => 822,
-            Key::Decimal => 823,
-            Key::Divide => 824,
+            Numpad0 => 810,
+            Numpad1 => 811,
+            Numpad2 => 812,
+            Numpad3 => 813,
+            Numpad4 => 814,
+            Numpad5 => 815,
+            Numpad6 => 816,
+            Numpad7 => 817,
+            Numpad8 => 818,
+            Numpad9 => 819,
+            NumpadMultiply => 820,
+            NumpadAdd => 821,
+            NumpadSubtract => 822,
+            NumpadDecimal => 823,
+            NumpadDivide => 824,
+            NumpadEnter => 815,
+            Multiply => 820,
+            Add => 821,
+            Subtract => 822,
+            Decimal => 823,
+            Divide => 824,
             _ => 0,
         }
     }
@@ -412,7 +365,7 @@ impl Drop for DdDriver {
         unsafe {
             if !self.hmodule.is_null() {
                 FreeLibrary(self.hmodule as _);
-                log::info!("DD驱动已卸载");
+                log::info!("DD 驱动已卸载");
             }
         }
     }
@@ -426,6 +379,3 @@ pub enum MouseButton {
     Back,
     Forward,
 }
-
-// 重新导出enigo::Key以便使用
-pub use enigo::Key;
