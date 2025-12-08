@@ -7,7 +7,10 @@ pub use windows::*;
 
 #[cfg(windows)]
 pub mod windows;
-
+#[cfg(windows)]
+pub mod driver;
+#[cfg(windows)]
+pub mod dd_enigo;
 #[cfg(windows)]
 pub mod win_device;
 
