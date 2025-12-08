@@ -6,8 +6,11 @@ use std::ptr;
 use winapi::ctypes::c_int;
 use winapi::um::libloaderapi::{FreeLibrary, LoadLibraryA, GetProcAddress};
 use winapi::um::winnt::LPCSTR;
-use log::{error, info, warn, debug};
 use std::ffi::CString;
+
+// 导入日志宏
+#[allow(unused_imports)]
+use log::{debug, error, info, warn, trace};
 
 #[derive(Debug)]
 pub struct DdDriver {
@@ -38,13 +41,13 @@ impl DdDriver {
                 std::path::PathBuf::from(dll_name)
             };
             
-            debug!("尝试加载DD驱动: {:?}", dll_path);
+            log::debug!("尝试加载DD驱动: {:?}", dll_path);
             
             // 转换为C字符串
             let c_path = match dll_path.to_str().and_then(|s| CString::new(s).ok()) {
                 Some(cstr) => cstr,
                 None => {
-                    error!("无法转换DLL路径为C字符串");
+                    log::error!("无法转换DLL路径为C字符串");
                     return None;
                 }
             };
@@ -55,7 +58,7 @@ impl DdDriver {
             if hmodule.is_null() {
                 // 获取Windows错误信息
                 let error_code = winapi::um::errhandlingapi::GetLastError();
-                error!("无法加载DD驱动DLL (错误代码: {})，请确保dd32695.x64.dll在当前目录", error_code);
+                log::error!("无法加载DD驱动DLL (错误代码: {})，请确保dd32695.x64.dll在当前目录", error_code);
                 return None;
             }
             
@@ -74,7 +77,7 @@ impl DdDriver {
             let dd_btn_func = if !dd_btn.is_null() {
                 Some(mem::transmute(dd_btn))
             } else {
-                error!("无法获取DD_btn函数地址");
+                log::error!("无法获取DD_btn函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
@@ -82,7 +85,7 @@ impl DdDriver {
             let dd_key_func = if !dd_key.is_null() {
                 Some(mem::transmute(dd_key))
             } else {
-                error!("无法获取DD_key函数地址");
+                log::error!("无法获取DD_key函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
@@ -90,7 +93,7 @@ impl DdDriver {
             let dd_mov_func = if !dd_mov.is_null() {
                 Some(mem::transmute(dd_mov))
             } else {
-                error!("无法获取DD_mov函数地址");
+                log::error!("无法获取DD_mov函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
@@ -98,7 +101,7 @@ impl DdDriver {
             let dd_whl_func = if !dd_whl.is_null() {
                 Some(mem::transmute(dd_whl))
             } else {
-                error!("无法获取DD_whl函数地址");
+                log::error!("无法获取DD_whl函数地址");
                 FreeLibrary(hmodule as _);
                 return None;
             };
@@ -107,9 +110,9 @@ impl DdDriver {
             if let Some(func) = dd_btn_func {
                 let result = func(0);
                 if result == 1 {
-                    info!("DD驱动初始化成功 (从当前目录加载)");
+                    log::info!("DD驱动初始化成功 (从当前目录加载)");
                 } else {
-                    warn!("DD驱动测试返回异常: {}", result);
+                    log::warn!("DD驱动测试返回异常: {}", result);
                 }
             }
             
@@ -145,7 +148,7 @@ impl DdDriver {
             if let Some(func) = self.dd_btn {
                 let result = func(code);
                 if result != 1 {
-                    debug!("DD驱动: 鼠标按下失败，返回码: {}", result);
+                    log::debug!("DD驱动: 鼠标按下失败，返回码: {}", result);
                 }
                 result == 1
             } else {
@@ -175,7 +178,7 @@ impl DdDriver {
             if let Some(func) = self.dd_btn {
                 let result = func(code);
                 if result != 1 {
-                    debug!("DD驱动: 鼠标释放失败，返回码: {}", result);
+                    log::debug!("DD驱动: 鼠标释放失败，返回码: {}", result);
                 }
                 result == 1
             } else {
@@ -193,7 +196,7 @@ impl DdDriver {
             if let Some(func) = self.dd_mov {
                 let result = func(x, y);
                 if result != 1 {
-                    debug!("DD驱动: 鼠标移动失败，坐标({}, {})，返回码: {}", x, y, result);
+                    log::debug!("DD驱动: 鼠标移动失败，坐标({}, {})，返回码: {}", x, y, result);
                 }
                 result == 1
             } else {
@@ -215,7 +218,7 @@ impl DdDriver {
                     func(2)  // 向下滚动
                 };
                 if result != 1 {
-                    debug!("DD驱动: 鼠标滚轮失败，delta: {}，返回码: {}", delta, result);
+                    log::debug!("DD驱动: 鼠标滚轮失败，delta: {}，返回码: {}", delta, result);
                 }
                 result == 1
             } else {
@@ -231,7 +234,7 @@ impl DdDriver {
         
         let dd_code = Self::key_to_dd_code(key);
         if dd_code == 0 {
-            debug!("DD驱动: 未知的按键: {:?}", key);
+            log::debug!("DD驱动: 未知的按键: {:?}", key);
             return false;
         }
         
@@ -239,7 +242,7 @@ impl DdDriver {
             if let Some(func) = self.dd_key {
                 let result = func(dd_code as c_int, 1);  // 1表示按下
                 if result != 1 {
-                    debug!("DD驱动: 按键按下失败，键码: {}，返回码: {}", dd_code, result);
+                    log::debug!("DD驱动: 按键按下失败，键码: {}，返回码: {}", dd_code, result);
                 }
                 result == 1
             } else {
@@ -255,7 +258,7 @@ impl DdDriver {
         
         let dd_code = Self::key_to_dd_code(key);
         if dd_code == 0 {
-            debug!("DD驱动: 未知的按键: {:?}", key);
+            log::debug!("DD驱动: 未知的按键: {:?}", key);
             return false;
         }
         
@@ -263,7 +266,7 @@ impl DdDriver {
             if let Some(func) = self.dd_key {
                 let result = func(dd_code as c_int, 2);  // 2表示释放
                 if result != 1 {
-                    debug!("DD驱动: 按键释放失败，键码: {}，返回码: {}", dd_code, result);
+                    log::debug!("DD驱动: 按键释放失败，键码: {}，返回码: {}", dd_code, result);
                 }
                 result == 1
             } else {
@@ -409,7 +412,7 @@ impl Drop for DdDriver {
         unsafe {
             if !self.hmodule.is_null() {
                 FreeLibrary(self.hmodule as _);
-                info!("DD驱动已卸载");
+                log::info!("DD驱动已卸载");
             }
         }
     }
