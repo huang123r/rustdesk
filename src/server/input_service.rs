@@ -7,469 +7,71 @@ use crate::whiteboard;
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
 use enigo::{Enigo, Key, KeyboardControllable, MouseButton, MouseControllable};
-use hbb_common::{
-    get_time,
-    message_proto::{pointer_device_event::Union::TouchEvent, touch_event::Union::ScaleUpdate},
-    protobuf::EnumOrUnknown,
+use hbb_common::{    
+get_time,    
+message_proto::{pointer_device_event::Union::TouchEvent, touch_event::Union::ScaleUpdate},    
+protobuf::EnumOrUnknown,
 };
 use rdev::{self, EventType, Key as RdevKey, KeyCode, RawKey};
 #[cfg(target_os = "macos")]
 use rdev::{CGEventSourceStateID, CGEventTapLocation, VirtualInput};
 #[cfg(target_os = "linux")]
 use scrap::wayland::pipewire::RDP_SESSION_INFO;
-use std::{
-    convert::TryFrom,
-    ops::{Deref, DerefMut},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread,
-    time::{self, Duration, Instant},
+use std::{    
+convert::TryFrom,    
+ops::{Deref, DerefMut},    
+sync::{        
+atomic::{AtomicBool, Ordering},        
+mpsc,    
+},    
+thread,    
+time::{self, Duration, Instant},
 };
 #[cfg(windows)]
 use winapi::um::winuser::WHEEL_DELTA;
-
-// 导入DD驱动相关模块
+// 导入 Windows 下的 DdEnigo（仅用于 Windows）
 #[cfg(target_os = "windows")]
-use crate::platform::windows::dd_enigo::DdEnigo;
-
+use crate::platform::dd_enigo::DdEnigo;
 const INVALID_CURSOR_POS: i32 = i32::MIN;
 const INVALID_DISPLAY_IDX: i32 = -1;
-
 #[derive(Default)]
-struct StateCursor {
-    hcursor: u64,
-    cursor_data: Arc<Message>,
-    cached_cursor_data: HashMap<u64, Arc<Message>>,
+struct StateCursor {    
+hcursor: u64,    
+cursor_data: Arc<Message>,    
+cached_cursor_data: HashMap<u64, Arc<Message>>,
 }
-
-impl super::service::Reset for StateCursor {
-    fn reset(&mut self) {
-        *self = Default::default();
-        crate::platform::reset_input_cache();
-        fix_key_down_timeout(true);
-    }
+impl super::service::Reset for StateCursor {    
+fn reset(&mut self) {        
+*self = Default::default();        
+crate::platform::reset_input_cache();        
+fix_key_down_timeout(true);    
 }
-
-struct StatePos {
-    cursor_pos: (i32, i32),
 }
-
-impl Default for StatePos {
-    fn default() -> Self {
-        Self {
-            cursor_pos: (INVALID_CURSOR_POS, INVALID_CURSOR_POS),
-        }
-    }
+struct StatePos {    
+cursor_pos: (i32, i32),
 }
-
-impl super::service::Reset for StatePos {
-    fn reset(&mut self) {
-        self.cursor_pos = (INVALID_CURSOR_POS, INVALID_CURSOR_POS);
-    }
+impl Default for StatePos {    
+fn default() -> Self {        
+Self {            
+cursor_pos: (INVALID_CURSOR_POS, INVALID_CURSOR_POS),        
+}    
 }
-
-impl StatePos {
-    #[inline]
-    fn is_valid(&self) -> bool {
-        self.cursor_pos.0 != INVALID_CURSOR_POS
-    }
-
-    #[inline]
-    fn is_moved(&self, x: i32, y: i32) -> bool {
-        self.is_valid() && (self.cursor_pos.0 != x || self.cursor_pos.1 != y)
-    }
 }
-
-#[derive(Default)]
-struct StateWindowFocus {
-    display_idx: i32,
+impl super::service::Reset for StatePos {    
+fn reset(&mut self) {        
+self.cursor_pos = (INVALID_CURSOR_POS, INVALID_CURSOR_POS);    
 }
-
-impl super::service::Reset for StateWindowFocus {
-    fn reset(&mut self) {
-        self.display_idx = INVALID_DISPLAY_IDX;
-    }
 }
-
-impl StateWindowFocus {
-    #[inline]
-    fn is_valid(&self) -> bool {
-        self.display_idx != INVALID_DISPLAY_IDX
-    }
-
-    #[inline]
-    fn is_changed(&self, disp_idx: i32) -> bool {
-        self.is_valid() && self.display_idx != disp_idx
-    }
+impl StatePos {    
+#[inline]    
+fn is_valid(&self) -> bool {        
+self.cursor_pos.0 != INVALID_CURSOR_POS    
 }
-
-#[derive(Default, Clone, Copy)]
-struct Input {
-    conn: i32,
-    time: i64,
-    x: i32,
-    y: i32,
+    #[inline]    
+fn is_moved(&self, x: i32, y: i32) -> bool {        
+self.is_valid() && (self.cursor_pos.0 != x || self.cursor_pos.1 != y)    
 }
-
-const KEY_CHAR_START: u64 = 9999;
-
-#[derive(Clone, Default)]
-pub struct MouseCursorSub {
-    inner: ConnInner,
-    cached: HashMap<u64, Arc<Message>>,
-}
-
-impl From<ConnInner> for MouseCursorSub {
-    fn from(inner: ConnInner) -> Self {
-        Self {
-            inner,
-            cached: HashMap::new(),
-        }
-    }
-}
-
-impl Subscriber for MouseCursorSub {
-    #[inline]
-    fn id(&self) -> i32 {
-        self.inner.id()
-    }
-
-    #[inline]
-    fn send(&mut self, msg: Arc<Message>) {
-        if let Some(message::Union::CursorData(cd)) = &msg.union {
-            if let Some(msg) = self.cached.get(&cd.id) {
-                self.inner.send(msg.clone());
-            } else {
-                self.inner.send(msg.clone());
-                let mut tmp = Message::new();
-                // only send id out, require client side cache also
-                tmp.set_cursor_id(cd.id);
-                self.cached.insert(cd.id, Arc::new(tmp));
-            }
-        } else {
-            self.inner.send(msg);
-        }
-    }
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-struct LockModesHandler {
-    caps_lock_changed: bool,
-    num_lock_changed: bool,
-}
-
-#[cfg(target_os = "macos")]
-struct LockModesHandler;
-
-impl LockModesHandler {
-    #[inline]
-    fn is_modifier_enabled(key_event: &KeyEvent, modifier: ControlKey) -> bool {
-        key_event.modifiers.contains(&modifier.into())
-    }
-
-    #[inline]
-    #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
-    fn new_handler(key_event: &KeyEvent, _is_numpad_key: bool) -> Self {
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        {
-            Self::new(key_event, _is_numpad_key)
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Self::new(key_event)
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn sleep_to_ensure_locked(v: bool, k: enigo::Key, en: &mut Enigo) {
-        if wayland_use_uinput() {
-            // Sleep at most 500ms to ensure the lock state is applied.
-            for _ in 0..50 {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                if en.get_key_state(k) == v {
-                    break;
-                }
-            }
-        } else if wayland_use_rdp_input() {
-            // We can't call `en.get_key_state(k)` because there's no api for this.
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-    }
-
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    fn new(key_event: &KeyEvent, is_numpad_key: bool) -> Self {
-        let mut en = ENIGO.lock().unwrap();
-        let event_caps_enabled = Self::is_modifier_enabled(key_event, ControlKey::CapsLock);
-        let local_caps_enabled = en.get_key_state(Key::CapsLock);
-        let caps_lock_changed = event_caps_enabled != local_caps_enabled;
-        if caps_lock_changed {
-            en.key_click(Key::CapsLock);
-            #[cfg(target_os = "linux")]
-            Self::sleep_to_ensure_locked(event_caps_enabled, Key::CapsLock, &mut en);
-        }
-
-        let mut num_lock_changed = false;
-        #[allow(unused)]
-        let mut event_num_enabled = false;
-        if is_numpad_key {
-            let local_num_enabled = en.get_key_state(Key::NumLock);
-            event_num_enabled = Self::is_modifier_enabled(key_event, ControlKey::NumLock);
-            num_lock_changed = event_num_enabled != local_num_enabled;
-        } else if is_legacy_mode(key_event) {
-            #[cfg(target_os = "windows")]
-            {
-                num_lock_changed =
-                    should_disable_numlock(key_event) && en.get_key_state(Key::NumLock);
-            }
-        }
-        if num_lock_changed {
-            en.key_click(Key::NumLock);
-            #[cfg(target_os = "linux")]
-            Self::sleep_to_ensure_locked(event_num_enabled, Key::NumLock, &mut en);
-        }
-
-        Self {
-            caps_lock_changed,
-            num_lock_changed,
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn new(key_event: &KeyEvent) -> Self {
-        let event_caps_enabled = Self::is_modifier_enabled(key_event, ControlKey::CapsLock);
-        // Do not use the following code to detect `local_caps_enabled`.
-        // Because the state of get_key_state will not affect simulation of `VIRTUAL_INPUT_STATE` in this file.
-        //
-        // let local_caps_enabled = VirtualInput::get_key_state(
-        //     CGEventSourceStateID::CombinedSessionState,
-        //     rdev::kVK_CapsLock,
-        // );
-        let local_caps_enabled = unsafe {
-            let _lock = VIRTUAL_INPUT_MTX.lock();
-            VIRTUAL_INPUT_STATE
-                .as_ref()
-                .map_or(false, |input| input.capslock_down)
-        };
-        if event_caps_enabled && !local_caps_enabled {
-            press_capslock();
-        } else if !event_caps_enabled && local_caps_enabled {
-            release_capslock();
-        }
-
-        Self {}
-    }
-}
-
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-impl Drop for LockModesHandler {
-    fn drop(&mut self) {
-        // Do not change led state if is Wayland uinput.
-        // Because there must be a delay to ensure the lock state is applied on Wayland uinput,
-        // which may affect the user experience.
-        #[cfg(target_os = "linux")]
-        if wayland_use_uinput() {
-            return;
-        }
-
-        let mut en = ENIGO.lock().unwrap();
-        if self.caps_lock_changed {
-            en.key_click(Key::CapsLock);
-        }
-        if self.num_lock_changed {
-            en.key_click(Key::NumLock);
-        }
-    }
-}
-
-#[inline]
-#[cfg(target_os = "windows")]
-fn should_disable_numlock(evt: &KeyEvent) -> bool {
-    // disable numlock if press home etc when numlock is on,
-    // because we will get numpad value (7,8,9 etc) if not
-    match (&evt.union, evt.mode.enum_value_or(KeyboardMode::Legacy)) {
-        (Some(key_event::Union::ControlKey(ck)), KeyboardMode::Legacy) => {
-            return NUMPAD_KEY_MAP.contains_key(&ck.value());
-        }
-        _ => {}
-    }
-    false
-}
-
-pub const NAME_CURSOR: &'static str = "mouse_cursor";
-pub const NAME_POS: &'static str = "mouse_pos";
-pub const NAME_WINDOW_FOCUS: &'static str = "window_focus";
-#[derive(Clone)]
-pub struct MouseCursorService {
-    pub sp: ServiceTmpl<MouseCursorSub>,
-}
-
-impl Deref for MouseCursorService {
-    type Target = ServiceTmpl<MouseCursorSub>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sp
-    }
-}
-
-impl DerefMut for MouseCursorService {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.sp
-    }
-}
-
-impl MouseCursorService {
-    pub fn new(name: String, need_snapshot: bool) -> Self {
-        Self {
-            sp: ServiceTmpl::<MouseCursorSub>::new(name, need_snapshot),
-        }
-    }
-}
-
-pub fn new_cursor() -> ServiceTmpl<MouseCursorSub> {
-    let svc = MouseCursorService::new(NAME_CURSOR.to_owned(), true);
-    ServiceTmpl::<MouseCursorSub>::repeat::<StateCursor, _, _>(&svc.clone(), 33, run_cursor);
-    svc.sp
-}
-
-pub fn new_pos() -> GenericService {
-    let svc = EmptyExtraFieldService::new(NAME_POS.to_owned(), false);
-    GenericService::repeat::<StatePos, _, _>(&svc.clone(), 33, run_pos);
-    svc.sp
-}
-
-pub fn new_window_focus() -> GenericService {
-    let svc = EmptyExtraFieldService::new(NAME_WINDOW_FOCUS.to_owned(), false);
-    GenericService::repeat::<StateWindowFocus, _, _>(&svc.clone(), 33, run_window_focus);
-    svc.sp
-}
-
-#[inline]
-fn update_last_cursor_pos(x: i32, y: i32) {
-    let mut lock = LATEST_SYS_CURSOR_POS.lock().unwrap();
-    if lock.1 .0 != x || lock.1 .1 != y {
-        (lock.0, lock.1) = (Some(Instant::now()), (x, y))
-    }
-}
-
-fn run_pos(sp: EmptyExtraFieldService, state: &mut StatePos) -> ResultType<()> {
-    let (_, (x, y)) = *LATEST_SYS_CURSOR_POS.lock().unwrap();
-    if x == INVALID_CURSOR_POS || y == INVALID_CURSOR_POS {
-        return Ok(());
-    }
-
-    if state.is_moved(x, y) {
-        let mut msg_out = Message::new();
-        msg_out.set_cursor_position(CursorPosition {
-            x,
-            y,
-            ..Default::default()
-        });
-        let exclude = {
-            let now = get_time();
-            let lock = LATEST_PEER_INPUT_CURSOR.lock().unwrap();
-            if now - lock.time < 300 {
-                lock.conn
-            } else {
-                0
-            }
-        };
-        sp.send_without(msg_out, exclude);
-    }
-    state.cursor_pos = (x, y);
-
-    sp.snapshot(|sps| {
-        let mut msg_out = Message::new();
-        msg_out.set_cursor_position(CursorPosition {
-            x: state.cursor_pos.0,
-            y: state.cursor_pos.1,
-            ..Default::default()
-        });
-        sps.send(msg_out);
-        Ok(())
-    })?;
-    Ok(())
-}
-
-fn run_cursor(sp: MouseCursorService, state: &mut StateCursor) -> ResultType<()> {
-    if let Some(hcursor) = crate::get_cursor()? {
-        if hcursor != state.hcursor {
-            let msg;
-            if let Some(cached) = state.cached_cursor_data.get(&hcursor) {
-                super::log::trace!("Cursor data cached, hcursor: {}", hcursor);
-                msg = cached.clone();
-            } else {
-                let mut data = crate::get_cursor_data(hcursor)?;
-                data.colors = hbb_common::compress::compress(&data.colors[..]).into();
-                let mut tmp = Message::new();
-                tmp.set_cursor_data(data);
-                msg = Arc::new(tmp);
-                state.cached_cursor_data.insert(hcursor, msg.clone());
-                super::log::trace!("Cursor data updated, hcursor: {}", hcursor);
-            }
-            state.hcursor = hcursor;
-            sp.send_shared(msg.clone());
-            state.cursor_data = msg;
-        }
-    }
-    sp.snapshot(|sps| {
-        sps.send_shared(state.cursor_data.clone());
-        Ok(())
-    })?;
-    Ok(())
-}
-
-fn run_window_focus(sp: EmptyExtraFieldService, state: &mut StateWindowFocus) -> ResultType<()> {
-    let displays = super::display_service::get_sync_displays();
-    if displays.len() <= 1 {
-        return Ok(());
-    }
-    let disp_idx = crate::get_focused_display(displays);
-    if let Some(disp_idx) = disp_idx.map(|id| id as i32) {
-        if state.is_changed(disp_idx) {
-            let mut misc = Misc::new();
-            misc.set_follow_current_display(disp_idx as i32);
-            let mut msg_out = Message::new();
-            msg_out.set_misc(misc);
-            sp.send(msg_out);
-        }
-        state.display_idx = disp_idx;
-    }
-    Ok(())
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-enum KeysDown {
-    RdevKey(RawKey),
-    EnigoKey(u64),
-}
-
-// 修改ENIGO的初始化，在Windows下使用DD驱动
-lazy_static::lazy_static! {
-    #[cfg(target_os = "windows")]
-    static ref ENIGO: Arc<Mutex<Box<dyn KeyboardControllable + MouseControllable + Send>>> = {
-        // 尝试使用DD驱动
-        if let Some(dd_enigo) = DdEnigo::new() {
-            log::info!("使用DD驱动进行输入控制");
-            Arc::new(Mutex::new(Box::new(dd_enigo)))
-        } else {
-            // 回退到标准Enigo
-            log::info!("DD驱动不可用，使用标准输入控制");
-            Arc::new(Mutex::new(Box::new(Enigo::new())))
-        }
-    };
-    
-    #[cfg(not(target_os = "windows"))]
-    static ref ENIGO: Arc<Mutex<Enigo>> = {
-        Arc::new(Mutex::new(Enigo::new()))
-    };
-    
-    static ref KEYS_DOWN: Arc<Mutex<HashMap<KeysDown, Instant>>> = Default::default();
-    static ref LATEST_PEER_INPUT_CURSOR: Arc<Mutex<Input>> = Default::default();
-    static ref LATEST_SYS_CURSOR_POS: Arc<Mutex<(Option<Instant>, (i32, i32))>> = Arc::new(Mutex::new((None, (INVALID_CURSOR_POS, INVALID_CURSOR_POS))));
-}
-static EXITING: AtomicBool = AtomicBool::new(false);
+static RECORD_CURSOR_POS_RUNNING: AtomicBool = AtomicBool::new(false);
 
 const MOUSE_MOVE_PROTECTION_TIMEOUT: Duration = Duration::from_millis(1_000);
 // Actual diff of (x,y) is (1,1) here. But 5 may be tolerant.
