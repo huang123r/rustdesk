@@ -1,15 +1,23 @@
+#![allow(dead_code)]
+// 平台模块总入口：只在对应平台编译对应模块，避免 Windows-only 代码在其它平台编译时报错。
+
 #[cfg(target_os = "linux")]
 pub use linux::*;
 #[cfg(target_os = "macos")]
 pub use macos::*;
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 pub use windows::*;
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 pub mod windows;
+
+// Windows-only: driver / dd_enigo 放在 platform 下并仅在 Windows 编译。
+#[cfg(target_os = "windows")]
 pub mod driver;
+#[cfg(target_os = "windows")]
 pub mod dd_enigo;
-#[cfg(windows)]
+
+#[cfg(target_os = "windows")]
 pub mod win_device;
 
 #[cfg(target_os = "macos")]
