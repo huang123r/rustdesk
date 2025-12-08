@@ -686,7 +686,7 @@ fn modifier_sleep() {
 
 #[inline]
 #[cfg(not(target_os = "macos"))]
-fn is_pressed(key: &Key, en: &mut Box<dyn KeyboardControllable + MouseControllable + Send>) -> bool {
+fn is_pressed(key: &Key, en: &mut (dyn KeyboardControllable + MouseControllable + Send)) -> bool {
     get_modifier_state(key.clone(), en)
 }
 
@@ -707,10 +707,7 @@ fn key_sleep() {
 }
 
 #[inline]
-fn get_modifier_state(key: Key, en: &mut Box<dyn KeyboardControllable + MouseControllable + Send>) -> bool {
-    // https://github.com/rustdesk/rustdesk/issues/332
-    // on Linux, if RightAlt is down, RightAlt status is false, Alt status is true
-    // but on Windows, both are true
+fn get_modifier_state(key: Key, en: &mut (dyn KeyboardControllable + MouseControllable + Send)) -> bool {
     let x = en.get_key_state(key.clone());
     match key {
         Key::Shift => x || en.get_key_state(Key::RightShift),
@@ -874,7 +871,7 @@ fn fix_modifier(
     modifiers: &[EnumOrUnknown<ControlKey>],
     key0: ControlKey,
     key1: Key,
-    en: &mut Box<dyn KeyboardControllable + MouseControllable + Send>,
+    en: &mut (dyn KeyboardControllable + MouseControllable + Send),
 ) {
     if get_modifier_state(key1, en) && !modifiers.contains(&EnumOrUnknown::new(key0)) {
         #[cfg(windows)]
@@ -887,7 +884,7 @@ fn fix_modifier(
     }
 }
 
-fn fix_modifiers(modifiers: &[EnumOrUnknown<ControlKey>], en: &mut Box<dyn KeyboardControllable + MouseControllable + Send>, ck: i32) {
+fn fix_modifiers(modifiers: &[EnumOrUnknown<ControlKey>], en: &mut (dyn KeyboardControllable + MouseControllable + Send), ck: i32) {
     if ck != ControlKey::Shift.value() {
         fix_modifier(modifiers, ControlKey::Shift, Key::Shift, en);
     }
