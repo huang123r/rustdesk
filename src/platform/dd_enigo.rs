@@ -1,7 +1,8 @@
 // src/platform/windows/dd_enigo.rs
 use super::driver::{DdDriver, Key, MouseButton};
 use enigo::{KeyboardControllable, MouseControllable, Settings};
-use log::{debug, warn};
+#[allow(unused_imports)]
+use log::{debug, warn, error, info};
 
 pub struct DdEnigo {
     driver: DdDriver,
@@ -22,6 +23,35 @@ impl DdEnigo {
     
     pub fn is_available(&self) -> bool {
         self.driver.is_initialized()
+    }
+    
+    // 添加 reset_flag 和 add_flag 方法以兼容 enigo 接口
+    pub fn reset_flag(&mut self) {
+        // DD驱动没有标志位概念，这个方法只是为了兼容接口
+    }
+    
+    pub fn add_flag(&mut self, _key: &Key) {
+        // DD驱动没有标志位概念，这个方法只是为了兼容接口
+    }
+    
+    pub fn set_ignore_flags(&mut self, _ignore: bool) {
+        // DD驱动没有标志位概念，这个方法只是为了兼容接口
+    }
+    
+    pub fn tfc_clear_remapped(&mut self) {
+        // DD驱动不支持键盘重映射清除
+    }
+    
+    pub fn set_custom_keyboard(&mut self, _keyboard: Box<dyn KeyboardControllable>) {
+        // DD驱动已经使用了自定义键盘，这个方法不需要实现
+    }
+    
+    pub fn set_custom_mouse(&mut self, _mouse: Box<dyn MouseControllable>) {
+        // DD驱动已经使用了自定义鼠标，这个方法不需要实现
+    }
+    
+    pub fn get_custom_mouse(&mut self) -> Option<&mut dyn MouseControllable> {
+        None
     }
 }
 
@@ -63,6 +93,12 @@ impl KeyboardControllable for DdEnigo {
     
     fn get_key_state(&mut self, key: Key) -> bool {
         self.driver.get_key_state(key)
+    }
+    
+    // 实现 enigo 的其他方法
+    fn raw_keycode(&mut self, keycode: u16, down: bool) -> Result<(), enigo::ErrorKind> {
+        // DD驱动不支持原始键码
+        Err(enigo::ErrorKind::InvalidInput)
     }
 }
 
@@ -151,6 +187,7 @@ impl MouseControllable for DdEnigo {
         }
     }
     
+    // 需要实现 main_display_size 方法
     fn main_display_size(&self) -> Result<(i32, i32), enigo::ErrorKind> {
         // 获取主显示器大小
         use winapi::um::winuser::GetSystemMetrics;
@@ -161,6 +198,22 @@ impl MouseControllable for DdEnigo {
             let width = GetSystemMetrics(SM_CXSCREEN);
             let height = GetSystemMetrics(SM_CYSCREEN);
             Ok((width, height))
+        }
+    }
+    
+    // 实现 macOS 特定的 mouse_scroll_x 和 mouse_scroll_y 方法
+    #[cfg(target_os = "macos")]
+    fn mouse_scroll_x(&mut self, length: i32, _is_track_pad: bool) -> Result<(), enigo::ErrorKind> {
+        // DD驱动不支持水平滚动
+        Err(enigo::ErrorKind::InvalidInput)
+    }
+    
+    #[cfg(target_os = "macos")]
+    fn mouse_scroll_y(&mut self, length: i32, _is_track_pad: bool) -> Result<(), enigo::ErrorKind> {
+        if self.driver.mouse_scroll(length) {
+            Ok(())
+        } else {
+            Err(enigo::ErrorKind::InvalidInput)
         }
     }
 }
