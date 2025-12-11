@@ -11,11 +11,7 @@ pub use windows::*;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
-// Windows-only: driver / dd_enigo 放在 platform 下并仅在 Windows 编译。
-#[cfg(target_os = "windows")]
-pub mod driver;
-#[cfg(target_os = "windows")]
-pub mod dd_enigo;
+
 
 #[cfg(target_os = "windows")]
 pub mod win_device;
