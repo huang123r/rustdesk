@@ -7,7 +7,6 @@ build= "build.rs"
 description = "RustDesk Remote Desktop"
 default-run = "rustdesk"
 rust-version = "1.75"
-
 [lib]
 name = "librustdesk"
 crate-type = ["cdylib", "staticlib", "rlib"]
@@ -224,3 +223,9 @@ panic = 'abort'
 strip = true
 #opt-level = 'z' # only have smaller size after strip
 rpath = true
+
+[dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
