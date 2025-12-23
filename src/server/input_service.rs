@@ -3,7 +3,7 @@ use super::rdp_input::client::{RdpInputKeyboard, RdpInputMouse};
 use super::*;
 use crate::input::*;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::whiteboard;
+use crate::whiteboard::Whiteboard; // 修改这里，导入具体的类型而不是模块
 #[cfg(target_os = "macos")]
 use dispatch::Queue;
 use hbb_common::{
@@ -36,6 +36,9 @@ use std::{
     thread,
     time::{self, Instant},
 };
+
+// 导入 ControlKey 枚举
+use crate::keyboard::ControlKey;
 
 const INVALID_CURSOR_POS: i32 = i32::MIN;
 const INVALID_DISPLAY_IDX: i32 = -1;
@@ -514,46 +517,45 @@ fn send_to_local_api(event: LocalInputEvent) {
 
 // 获取控制键名称
 fn get_control_key_name(value: i32) -> String {
-    use crate::keyboard::ControlKey::*;
     match value {
-        v if v == Alt.value() => "Alt".to_string(),
-        v if v == RAlt.value() => "RightAlt".to_string(),
-        v if v == Control.value() => "Control".to_string(),
-        v if v == RControl.value() => "RightControl".to_string(),
-        v if v == Shift.value() => "Shift".to_string(),
-        v if v == RShift.value() => "RightShift".to_string(),
-        v if v == Meta.value() => "Meta".to_string(),
-        v if v == RWin.value() => "RightWin".to_string(),
-        v if v == Return.value() => "Return".to_string(),
-        v if v == Escape.value() => "Escape".to_string(),
-        v if v == Backspace.value() => "Backspace".to_string(),
-        v if v == Tab.value() => "Tab".to_string(),
-        v if v == Space.value() => "Space".to_string(),
-        v if v == CapsLock.value() => "CapsLock".to_string(),
-        v if v == NumLock.value() => "NumLock".to_string(),
-        v if v == Scroll.value() => "ScrollLock".to_string(),
-        v if v == Insert.value() => "Insert".to_string(),
-        v if v == Delete.value() => "Delete".to_string(),
-        v if v == Home.value() => "Home".to_string(),
-        v if v == End.value() => "End".to_string(),
-        v if v == PageUp.value() => "PageUp".to_string(),
-        v if v == PageDown.value() => "PageDown".to_string(),
-        v if v == UpArrow.value() => "UpArrow".to_string(),
-        v if v == DownArrow.value() => "DownArrow".to_string(),
-        v if v == LeftArrow.value() => "LeftArrow".to_string(),
-        v if v == RightArrow.value() => "RightArrow".to_string(),
-        v if v == F1.value() => "F1".to_string(),
-        v if v == F2.value() => "F2".to_string(),
-        v if v == F3.value() => "F3".to_string(),
-        v if v == F4.value() => "F4".to_string(),
-        v if v == F5.value() => "F5".to_string(),
-        v if v == F6.value() => "F6".to_string(),
-        v if v == F7.value() => "F7".to_string(),
-        v if v == F8.value() => "F8".to_string(),
-        v if v == F9.value() => "F9".to_string(),
-        v if v == F10.value() => "F10".to_string(),
-        v if v == F11.value() => "F11".to_string(),
-        v if v == F12.value() => "F12".to_string(),
+        v if v == ControlKey::Alt.value() => "Alt".to_string(),
+        v if v == ControlKey::RAlt.value() => "RightAlt".to_string(),
+        v if v == ControlKey::Control.value() => "Control".to_string(),
+        v if v == ControlKey::RControl.value() => "RightControl".to_string(),
+        v if v == ControlKey::Shift.value() => "Shift".to_string(),
+        v if v == ControlKey::RShift.value() => "RightShift".to_string(),
+        v if v == ControlKey::Meta.value() => "Meta".to_string(),
+        v if v == ControlKey::RWin.value() => "RightWin".to_string(),
+        v if v == ControlKey::Return.value() => "Return".to_string(),
+        v if v == ControlKey::Escape.value() => "Escape".to_string(),
+        v if v == ControlKey::Backspace.value() => "Backspace".to_string(),
+        v if v == ControlKey::Tab.value() => "Tab".to_string(),
+        v if v == ControlKey::Space.value() => "Space".to_string(),
+        v if v == ControlKey::CapsLock.value() => "CapsLock".to_string(),
+        v if v == ControlKey::NumLock.value() => "NumLock".to_string(),
+        v if v == ControlKey::Scroll.value() => "ScrollLock".to_string(),
+        v if v == ControlKey::Insert.value() => "Insert".to_string(),
+        v if v == ControlKey::Delete.value() => "Delete".to_string(),
+        v if v == ControlKey::Home.value() => "Home".to_string(),
+        v if v == ControlKey::End.value() => "End".to_string(),
+        v if v == ControlKey::PageUp.value() => "PageUp".to_string(),
+        v if v == ControlKey::PageDown.value() => "PageDown".to_string(),
+        v if v == ControlKey::UpArrow.value() => "UpArrow".to_string(),
+        v if v == ControlKey::DownArrow.value() => "DownArrow".to_string(),
+        v if v == ControlKey::LeftArrow.value() => "LeftArrow".to_string(),
+        v if v == ControlKey::RightArrow.value() => "RightArrow".to_string(),
+        v if v == ControlKey::F1.value() => "F1".to_string(),
+        v if v == ControlKey::F2.value() => "F2".to_string(),
+        v if v == ControlKey::F3.value() => "F3".to_string(),
+        v if v == ControlKey::F4.value() => "F4".to_string(),
+        v if v == ControlKey::F5.value() => "F5".to_string(),
+        v if v == ControlKey::F6.value() => "F6".to_string(),
+        v if v == ControlKey::F7.value() => "F7".to_string(),
+        v if v == ControlKey::F8.value() => "F8".to_string(),
+        v if v == ControlKey::F9.value() => "F9".to_string(),
+        v if v == ControlKey::F10.value() => "F10".to_string(),
+        v if v == ControlKey::F11.value() => "F11".to_string(),
+        v if v == ControlKey::F12.value() => "F12".to_string(),
         _ => format!("Key_{}", value),
     }
 }
@@ -854,8 +856,12 @@ pub async fn is_local_api_enabled() -> bool {
     *enabled_guard
 }
 
-// 在Cargo.toml中添加依赖：
-// reqwest = { version = "0.11", features = ["json"] }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = "1.0"
-// tokio = { version = "1.0", features = ["full"] }
+// 由于我们移除了实际的输入处理，需要提供一个空的主函数或者修改函数调用
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn handle_mouse_(evt: &MouseEvent, conn: i32, username: String, argb: u32, simulate: bool, show_cursor: bool) {
+    if simulate {
+        handle_mouse_simulation_(evt, conn);
+    } else {
+        handle_mouse_show_cursor_(evt, conn, username, argb);
+    }
+}
